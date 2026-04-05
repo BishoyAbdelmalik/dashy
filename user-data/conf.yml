@@ -8,7 +8,7 @@ pageInfo:
     path: https://ebay.us/m/CLEmO3
   - title: AshZone FB Page
     path: https://www.facebook.com/AshZoneOnlineStore
-  footer: "© 2026"
+  footerText: "© 2026"
 # Optional app settings and configuration
 appConfig:
   theme: colorful
