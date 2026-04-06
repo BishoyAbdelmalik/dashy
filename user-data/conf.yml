@@ -12,6 +12,7 @@ pageInfo:
 # Optional app settings and configuration
 appConfig:
   theme: colorful
+  defaultIcon: favicon
   webSearch: 
       searchEngine: "google"
   
