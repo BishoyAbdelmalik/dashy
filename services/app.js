@@ -17,7 +17,6 @@ const yaml = require('js-yaml');
 /* Import Express + middleware functions */
 const express = require('express');
 const basicAuth = require('express-basic-auth');
-const history = require('connect-history-api-fallback');
 
 /* Kick of some basic checks */
 require('./update-checker'); // Checks if there are any updates available, prints message
@@ -27,14 +26,28 @@ let config = require('./config-validator'); // Validate config file and load res
 /* Include route handlers for API endpoints */
 const statusCheck = require('./status-check'); // Used by the status check feature, uses GET
 const saveConfig = require('./save-config'); // Saves users new conf.yml to file-system
-const rebuild = require('./rebuild-app'); // A script to programmatically trigger a build
 const systemInfo = require('./system-info'); // Basic system info, for resource widget
 const sslServer = require('./ssl-server'); // TLS-enabled web server
 const corsProxy = require('./cors-proxy'); // Enables API requests to CORS-blocked services
 const getUser = require('./get-user'); // Enables server side user lookup
 
-/* Helper functions, and default config */
-const ENDPOINTS = require('../src/utils/defaults').serviceEndpoints; // API endpoint URL paths
+const { loadOidcSettings, createOidcMiddleware, maybeBootstrapConfig } = require('./auth-oidc');
+
+/* Service endpoint URL paths (see also serviceEndpoints in src/utils/config/defaults.js) */
+const ENDPOINTS = {
+  health: '/healthz',
+  statusPing: '/status-ping',
+  statusCheck: '/status-check',
+  save: '/config-manager/save',
+  systemInfo: '/system-info',
+  corsProxy: '/cors-proxy',
+  getUser: '/get-user',
+};
+
+/* Read package version once at startup, so healthcheck never touches the disk per-request */
+let appVersion = 'unknown';
+try { appVersion = require(path.join(rootDir, 'package.json')).version || 'unknown'; }
+catch { /* non-fatal — fall back to 'unknown' */ }
 
 /* Indicates for the webpack config, that running as a server */
 process.env.IS_SERVER = 'True';
@@ -67,7 +80,7 @@ process.on('unhandledRejection', (reason) => {
 /* Load appConfig.auth from config (if present) for authorization purposes */
 function loadAuthConfig() {
   try {
-    const filePath = path.join(rootDir, process.env.USER_DATA_DIR || 'user-data', 'conf.yml');
+    const filePath = path.resolve(rootDir, process.env.USER_DATA_DIR || 'user-data', 'conf.yml');
     const fileContents = fs.readFileSync(filePath, 'utf8');
     const data = yaml.load(fileContents);
     return data?.appConfig?.auth || {};
@@ -105,9 +118,9 @@ function customAuthorizer(username, password) {
   }
 }
 
-/* If auth is enabled, setup auth for config access, otherwise skip */
-function getBasicAuthMiddleware() {
-  const authConfig = loadAuthConfig();
+/* Pick an auth strategy based on what's configured in conf.yml + env.
+   OIDC / Keycloak takes precedence — it's the strongest enforcement we offer. */
+function getAuthMiddleware(authConfig, oidcSettings) {
   const confUsers = authConfig.users || null;
   const hasConfUsers = confUsers && confUsers.length > 0;
   const useConfAuth = process.env.ENABLE_HTTP_AUTH && hasConfUsers;
@@ -122,7 +135,9 @@ function getBasicAuthMiddleware() {
         + ' This will cause auth failures. Set ENABLE_HTTP_AUTH=true, or remove users from conf.yml.');
   }
 
-  if (useConfAuth) {
+  if (oidcSettings) {
+    return createOidcMiddleware(oidcSettings);
+  } else if (useConfAuth) {
     return basicAuth({
       authorizer: customAuthorizer,
       challenge: true,
@@ -152,11 +167,41 @@ function getBasicAuthMiddleware() {
   return (req, res, next) => next();
 }
 
-const protectConfig = getBasicAuthMiddleware();
+const initialAuthConfig = loadAuthConfig();
+const oidcSettings = loadOidcSettings(initialAuthConfig);
+const protectConfig = getAuthMiddleware(initialAuthConfig, oidcSettings);
+const bootstrapAuth = oidcSettings
+  ? createOidcMiddleware(oidcSettings, { permissive: true })
+  : protectConfig;
 
-/* Middleware to restrict write endpoints to admin users only */
+/* True when any auth method is configured. Used to keep zero-auth deployments
+   open (their original behaviour) while closing the gate for everyone else. */
+const authIsConfigured = Boolean(
+  oidcSettings
+  || (process.env.ENABLE_HTTP_AUTH && initialAuthConfig.users?.length)
+  || (process.env.BASIC_AUTH_USERNAME && process.env.BASIC_AUTH_PASSWORD)
+  || (initialAuthConfig.enableHeaderAuth && initialAuthConfig.headerAuth),
+);
+const guestAccessOn = Boolean(initialAuthConfig?.enableGuestAccess);
+
+/* Require an authenticated identity on this request. No-op for zero-auth deploys. */
+function requireAuth(req, res, next) {
+  if (!authIsConfigured) return next();
+  if (req.auth) return next();
+  return res.status(401).json({ success: false, message: 'Unauthorized' });
+}
+
+/* Restrict to admin users. OIDC/Keycloak get isAdmin from token claims; the
+   conf.yml `users[]` path falls back to looking up user.type === 'admin'. */
 function requireAdmin(req, res, next) {
-  if (!req.auth) return next();
+  if (!authIsConfigured) return next();
+  if (!req.auth) {
+    return res.status(401).json({ success: false, message: 'Unauthorized' });
+  }
+  if (typeof req.auth.isAdmin === 'boolean') {
+    if (req.auth.isAdmin) return next();
+    return res.status(403).json({ success: false, message: 'Forbidden - Admin access required' });
+  }
   const users = loadUserConfig();
   if (!users || users.length === 0) return next();
   const user = users.find(u => u.user.toLowerCase() === req.auth.user.toLowerCase());
@@ -168,12 +213,19 @@ function requireAdmin(req, res, next) {
 const method = (m, mw) => (req, res, next) => (req.method === m ? mw(req, res, next) : next());
 
 const app = express()
+  .get(ENDPOINTS.health, (req, res) => {
+    res.set('Cache-Control', 'no-store').status(200).json({
+      status: 'ok',
+      uptime: Math.round(process.uptime()),
+      version: appVersion,
+    });
+  })
   // Load SSL redirection middleware
   .use(sslServer.middleware)
   // Load middlewares for parsing JSON, and supporting HTML5 history routing
   .use(express.json({ limit: '1mb' }))
   // GET endpoint to run status of a given URL with GET request
-  .use(ENDPOINTS.statusCheck, protectConfig, method('GET', (req, res) => {
+  .use(ENDPOINTS.statusCheck, protectConfig, requireAuth, method('GET', (req, res) => {
     try {
       statusCheck(req.url, (results) => {
         if (!res.headersSent) {
@@ -204,14 +256,8 @@ const app = express()
       respond(JSON.stringify({ success: false, message: String(e) }));
     });
   }))
-  // GET endpoint to trigger a build, and respond with success status and output
-  .use(ENDPOINTS.rebuild, protectConfig, requireAdmin, method('GET', (req, res) => {
-    rebuild()
-      .then((response) => safeEnd(res, JSON.stringify(response)))
-      .catch((e) => safeEnd(res, errBody(e)));
-  }))
   // GET endpoint to return system info, for widget
-  .use(ENDPOINTS.systemInfo, protectConfig, method('GET', (req, res) => {
+  .use(ENDPOINTS.systemInfo, protectConfig, requireAuth, method('GET', (req, res) => {
     try {
       safeEnd(res, JSON.stringify(systemInfo()));
     } catch (e) {
@@ -219,7 +265,7 @@ const app = express()
     }
   }))
   // GET for accessing non-CORS API services
-  .use(ENDPOINTS.corsProxy, protectConfig, (req, res) => {
+  .use(ENDPOINTS.corsProxy, protectConfig, requireAuth, (req, res) => {
     try {
       corsProxy(req, res);
     } catch (e) {
@@ -227,7 +273,7 @@ const app = express()
     }
   })
   // GET endpoint to return user info
-  .use(ENDPOINTS.getUser, protectConfig, method('GET', (req, res) => {
+  .use(ENDPOINTS.getUser, protectConfig, requireAuth, method('GET', (req, res) => {
     try {
       safeEnd(res, JSON.stringify(getUser(config, req)));
     } catch (e) {
@@ -235,18 +281,36 @@ const app = express()
     }
   }))
   // Middleware to serve any .yml files in USER_DATA_DIR with optional protection
-  .get('/*.yml', protectConfig, (req, res) => {
+  // Note: returns stripped version if auth configured but not yet authenticated
+  .get('/*.yml', bootstrapAuth, (req, res) => {
     const ymlFile = req.path.split('/').pop();
-    const filePath = path.join(rootDir, process.env.USER_DATA_DIR || 'user-data', ymlFile);
+    const filePath = path.resolve(rootDir, process.env.USER_DATA_DIR || 'user-data', ymlFile);
+    if (authIsConfigured) {
+      res.set('Cache-Control', 'private, no-store').set('Vary', 'Authorization');
+      try {
+        const stripped = maybeBootstrapConfig(filePath, {
+          isRootConfig: ymlFile === 'conf.yml',
+          isAuthenticated: Boolean(req.auth),
+          guestAccessOn,
+        });
+        if (stripped) return res.type('text/yaml').send(stripped);
+      } catch (e) {
+        printWarning(`Failed to read or parse ${ymlFile}`, e);
+        return safeEnd(res, errBody('Could not read config'), 500);
+      }
+      // Not authenticated, not main conf.yml
+      if (!req.auth && !guestAccessOn) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+    }
     res.sendFile(filePath, (err) => {
       if (err) safeEnd(res, errBody(`Could not read ${ymlFile}`), 404);
     });
   })
   // Serves up static files
-  .use(express.static(path.join(rootDir, process.env.USER_DATA_DIR || 'user-data')))
+  .use(express.static(path.resolve(rootDir, process.env.USER_DATA_DIR || 'user-data')))
   .use(express.static(path.join(rootDir, 'dist')))
   .use(express.static(path.join(rootDir, 'public'), { index: 'initialization.html' }))
-  .use(history())
   // If no other route is matched, serve up the index.html with a 404 status
   .use((req, res) => {
     res.status(404).sendFile(path.join(rootDir, 'dist', 'index.html'), (err) => {

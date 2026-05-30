@@ -7,12 +7,15 @@
  * Throws on non-2xx responses (matching axios behavior)
  */
 
+import { makeBasicAuthHeaders } from '@/utils/auth/Auth';
+import getApiAuthHeader from '@/utils/auth/getApiAuthHeader';
+
 /** Check if a request URL targets the local Dashy server */
 function isLocalRequest(url) {
   if (!url) return false;
   if (url.startsWith('/') && !url.startsWith('//')) return true;
   const { origin } = window.location;
-  const domain = process.env.VUE_APP_DOMAIN;
+  const domain = import.meta.env.VITE_APP_DOMAIN;
   return url.startsWith(origin) || (domain && url.startsWith(domain));
 }
 
@@ -23,6 +26,7 @@ class RequestError extends Error {
     this.response = opts.response || undefined;
     this.request = opts.request || undefined;
     this.code = opts.code || undefined;
+    this.timeout = opts.timeout === true ? true : undefined;
   }
 }
 
@@ -61,12 +65,17 @@ async function makeRequest(config) {
     signal: controller.signal,
   };
 
-  // For local API requests, include basic auth headers when configured
+  // For local API requests, attach auth headers when configured
+  // Bearer (OIDC / Keycloak id_token) takes precedence over basic-auth cookie header
   if (isLocalRequest(fullUrl) && !fetchOptions.headers.Authorization) {
-    const { makeBasicAuthHeaders } = await import('@/utils/Auth');
-    const authConfig = makeBasicAuthHeaders();
-    if (authConfig.headers) {
-      Object.assign(fetchOptions.headers, authConfig.headers);
+    const bearer = getApiAuthHeader();
+    if (bearer) {
+      Object.assign(fetchOptions.headers, bearer);
+    } else {
+      const authConfig = makeBasicAuthHeaders();
+      if (authConfig.headers) {
+        Object.assign(fetchOptions.headers, authConfig.headers);
+      }
     }
   }
 
@@ -91,7 +100,7 @@ async function makeRequest(config) {
     // Parse response - try JSON first, fall back to text
     let responseData;
     const text = await res.text();
-    try { responseData = JSON.parse(text); } catch (_) { responseData = text; }
+    try { responseData = JSON.parse(text); } catch { responseData = text; }
 
     const response = {
       data: responseData,
@@ -112,13 +121,11 @@ async function makeRequest(config) {
   } catch (err) {
     if (err instanceof RequestError) throw err;
     // Network error or abort/timeout
-    // Set request: true so callers can distinguish "no response" from other errors
-    // (mirrors axios behavior where error.request is set when no response received)
-    const error = new RequestError(err.message, { request: true });
-    if (err.name === 'AbortError') {
-      error.message = `timeout of ${timeout}ms exceeded`;
-      error.code = 'ECONNABORTED';
-    }
+    const isTimeout = err.name === 'AbortError';
+    const error = new RequestError(
+      isTimeout ? `timeout of ${timeout}ms exceeded` : err.message,
+      { request: true, code: isTimeout ? 'ECONNABORTED' : undefined, timeout: isTimeout },
+    );
     throw error;
   } finally {
     if (timeoutId) clearTimeout(timeoutId);

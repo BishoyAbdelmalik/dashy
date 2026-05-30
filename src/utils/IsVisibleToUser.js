@@ -5,8 +5,8 @@
  */
 
 // Import helper functions from auth, to get current user, and check if guest
-import { localStorageKeys } from '@/utils/defaults';
-import { isLoggedInAsGuest } from '@/utils/Auth';
+import { localStorageKeys } from '@/utils/config/defaults';
+import { isLoggedInAsGuest } from '@/utils/auth/Auth';
 
 /* Helper function, checks if a given testValue is found in the visibility list */
 const determineVisibility = (visibilityList, testValue) => {
@@ -25,9 +25,9 @@ const determineIntersection = (source = [], target = []) => {
 };
 
 /* Returns false if the displayData of a section/item
-    should not be rendered for the current user/ guest */
-export const isVisibleToUser = (displayData, currentUser) => {
-  const isGuest = isLoggedInAsGuest(); // Check if current user is a guest
+ * says it should not be rendered for current user/guest */
+export const isVisibleToUser = (displayData, currentUser, isGuest) => {
+  if (isGuest === undefined) isGuest = isLoggedInAsGuest();
 
   // Checks if user explicitly has access to a certain section
   const checkVisibility = () => {
@@ -44,10 +44,14 @@ export const isVisibleToUser = (displayData, currentUser) => {
     if (showForUsers.length < 1) return true;
     return determineVisibility(showForUsers, cUsername);
   };
+  const getKeycloakInfo = () => {
+    try { return JSON.parse(localStorage.getItem(localStorageKeys.KEYCLOAK_INFO) || '{}'); }
+    catch { return {}; }
+  };
   const checkKeycloakVisibility = () => {
     if (!displayData.hideForKeycloakUsers) return true;
 
-    const { groups, roles } = JSON.parse(localStorage.getItem(localStorageKeys.KEYCLOAK_INFO) || '{}');
+    const { groups, roles } = getKeycloakInfo();
     const hideForGroups = displayData.hideForKeycloakUsers.groups || [];
     const hideForRoles = displayData.hideForKeycloakUsers.roles || [];
 
@@ -57,7 +61,7 @@ export const isVisibleToUser = (displayData, currentUser) => {
   const checkKeycloakHiddenability = () => {
     if (!displayData.showForKeycloakUsers) return true;
 
-    const { groups, roles } = JSON.parse(localStorage.getItem(localStorageKeys.KEYCLOAK_INFO) || '{}');
+    const { groups, roles } = getKeycloakInfo();
     const showForGroups = displayData.showForKeycloakUsers.groups || [];
     const showForRoles = displayData.showForKeycloakUsers.roles || [];
 

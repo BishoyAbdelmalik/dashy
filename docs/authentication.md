@@ -28,9 +28,8 @@
 
 
 > [!IMPORTANT]
-> Dashy's built-in auth is not intended to protect a publicly hosted instance against unauthorized access. Instead you should use an auth provider compatible with your reverse proxy, or access Dashy via your VPN, or implement your own SSO logic. 
->
-> If Dashy is only accessible within your home network and you just want a login page, then the built-in auth may be sufficient. To also protect server-side endpoints and config files, set `ENABLE_HTTP_AUTH=true` (see [Adding HTTP Auth to Configuration](#adding-http-auth-to-configuration)).
+> It is your responsibility to properly secure your Dashy instance.
+> Never expose your Dashy instance to the public internet or untrusted users without sufficient authentication and authorization in place.
 
 ## Built-In Auth
 
@@ -114,7 +113,7 @@ pages:
 
 Any user who is not an admin (with `type: admin`) will not be able to write changes to disk.
 
-You can also prevent any user from writing changes to disk, using `preventWriteToDisk`. Or prevent any changes from being saved locally in browser storage, using `preventLocalSave`. Both properties can be found under [`appConfig`](./docs/configuring.md#appconfig-optional).
+You can also prevent any user from writing changes to disk, using `preventWriteToDisk`. Or prevent any changes from being saved locally in browser storage, using `preventLocalSave`. Both properties can be found under [`appConfig`](./configuring.md#appconfig-optional).
 
 To disable all UI config features, including View Config, set `disableConfiguration`. Alternatively you can disable UI config features for all non admin users by setting `disableConfigurationForNonAdmin` to true.
 
@@ -122,7 +121,7 @@ To disable all UI config features, including View Config, set `disableConfigurat
 
 If you don't want to hash your password, you can instead leave out the `hash` attribute, and replace it with `password` which should have the value of an environmental variable name you wish to use.
 
-Note that env var must begin with `VUE_APP_`, and you must set this variable before building the app.
+Note that env var must begin with `VITE_APP_`, and you must set this variable before building the app.
 
 For example:
 
@@ -130,10 +129,10 @@ For example:
   auth:
     users:
     - user: bob
-      password: VUE_APP_BOB
+      password: VITE_APP_BOB
 ```
 
-Just be sure to set `VUE_APP_BOB='my super secret password'` before build-time.
+Just be sure to set `VITE_APP_BOB='my super secret password'` before build-time.
 
 ### Adding HTTP Auth to Configuration
 
@@ -184,7 +183,7 @@ If you don't have users in your `conf.yml` (e.g. you handle user management exte
 
 With this approach, there is no Dashy login page. When the browser first requests the config file, the server responds with a `401` and the browser shows its native HTTP auth prompt. Once the user enters the correct credentials, the browser caches them for the session and all subsequent requests work.
 
-To skip the browser prompt and have the frontend authenticate automatically, also set `VUE_APP_BASIC_AUTH_USERNAME` and `VUE_APP_BASIC_AUTH_PASSWORD` to the same values. These are baked in at build time, so a rebuild is required, and you should only do this on a trusted network.
+To skip the browser prompt and have the frontend authenticate automatically, also set `VITE_APP_BASIC_AUTH_USERNAME` and `VITE_APP_BASIC_AUTH_PASSWORD` to the same values. These are baked in at build time, so a rebuild is required, and you should only do this on a trusted network.
 
 > [!WARNING]
 > Do not combine `BASIC_AUTH_USERNAME`/`BASIC_AUTH_PASSWORD` with conf.yml users. If both are present, the server will log a warning at startup. With `ENABLE_HTTP_AUTH` set, config-file users take priority and the static credentials are ignored. Without it, the static credentials protect the server but the Dashy login page will use conf.yml credentials, and the frontend will send the wrong credentials to server endpoints. Pick one approach or the other.
@@ -195,49 +194,135 @@ To skip the browser prompt and have the frontend authenticate automatically, als
 
 ## Keycloak
 
-Dashy also supports using a [Keycloak](https://www.keycloak.org/) authentication server. The setup for this is a bit more involved, but it gives you greater security overall, useful for if your instance is exposed to the internet.
+Dashy also supports using a [Keycloak](https://www.keycloak.org/) (V17+) authentication server. The setup for this is a bit more involved, but it gives you greater security overall, useful for if your instance is exposed to the internet.
 
-[Keycloak](https://www.keycloak.org/about.html) is a Java-based [open source](https://github.com/keycloak/keycloak), high-performance, secure authentication system, supported by [RedHat](https://www.redhat.com/en). It is easy to setup ([with Docker](https://quay.io/repository/keycloak/keycloak)), and enables you to secure multiple self-hosted applications with single-sign-on using standard protocols (OpenID Connect, OAuth 2.0, SAML 2.0 and social login). It's also very customizable, you can write or use custom [themes](https://wjw465150.gitbooks.io/keycloak-documentation/content/server_development/topics/themes.html), [plugins](https://www.keycloak.org/extensions.html), [password policies](https://wjw465150.gitbooks.io/keycloak-documentation/content/server_admin/topics/authentication/password-policies.html) and more.
-The following guide will walk you through setting up Keycloak with Dashy. If you already have a Keycloak instance configured, then skip to Step 3.
+[Keycloak](https://www.keycloak.org/about.html) is a Java-based [open source](https://github.com/keycloak/keycloak), high-performance, secure authentication system, supported by [RedHat](https://www.redhat.com/en). It can be deployed with Docker ([`quay.io/repository/keycloak/keycloak`](https://quay.io/repository/keycloak/keycloak)), and enables you to secure multiple self-hosted applications with single-sign-on using standard protocols (OpenID Connect, OAuth 2.0, SAML 2.0 and social login).
 
 ### 1. Deploy Keycloak
 
-First thing to do is to spin up a new instance of Keycloak. You will need [Docker installed](https://docs.docker.com/engine/install/), and can then choose a tag, and pull the container from [quay.io/keycloak/keycloak](https://quay.io/repository/keycloak/keycloak)
-
-Use the following run command, replacing the attributes (default credentials, port and name), or incorporate this into your docker-compose file.
+If you've not already done so, spin up a Keycloak instance.
+You can do this by following the [Keycloak Docs](https://www.keycloak.org/guides.html#getting-started), or use the following Docker examples:
 
 ```bash
 docker run -d \
-  -p 8081:8080 \
-  --name auth-server \
-  -e KEYCLOAK_USER=admin \
-  -e KEYCLOAK_PASSWORD=admin \
-  quay.io/keycloak/keycloak:15.0.2
+  -p 9100:8080 \
+  --name keycloak \
+  -e KEYCLOAK_ADMIN=kc-admin \
+  -e KEYCLOAK_ADMIN_PASSWORD=KeycloakAdmin2026! \
+  quay.io/keycloak/keycloak:25.0 start-dev
 ```
 
-If you need to pull from DockerHub, a non-official image is available [here](https://registry.hub.docker.com/r/jboss/keycloak). Or if you would prefer not to use Docker, you can also directly install Keycloak from source, following [this guide](https://www.keycloak.org/docs/latest/getting_started/index.html).
+<details>
+    <summary>Example <code>docker-compose.yml</code></summary>
 
-You should now be able to access the Keycloak web interface, using the port specified above (e.g. `http://127.0.0.1:8081`), login with the default credentials, and when prompted create a new password.
+```env
+KEYCLOAK_ADMIN=kc-admin
+KEYCLOAK_ADMIN_PASSWORD=KeycloakAdmin2026!
+```
+
+```yaml
+name: dashy-keycloak
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    command:
+      - start-dev
+      - --http-port=9100
+      - --hostname-strict=false
+      - --health-enabled=true
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+      - "4000:8080"
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HEALTH_ENABLED: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/9100'"]
+      start_period: 30s
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
+  dashy:
+    image: lissy93/dashy:4.1.0
+    network_mode: service:keycloak
+    restart: unless-stopped
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 8080
+    volumes:
+      - ./user-data:/app/user-data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1"]
+      start_period: 30s
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
+volumes:
+  keycloak-data:
+```
+
+</details>
+
+You should now be able to access the Keycloak web interface at `http://127.0.0.1:9100`, log in with your admin credentials above, and create a new password when prompted.
 
 ### 2. Setup Keycloak Users
 
 Before we can use Keycloak, we must first set it up with some users. Keycloak uses Realms (similar to tenants) to create isolated groups of users. You must create a Realm before you will be able to add your first user.
 
 1. Head over to the admin console
-2. In the top-left corner there is a dropdown called 'Master', hover over it and then click 'Add Realm'
+2. In the top-left corner there is a dropdown called 'Master', open it and click 'Create realm'
 3. Give your realm a name, and hit 'Create'
+
+Before adding users and clients, allow Dashy's origin in the iframe Keycloak uses for session checks. Without this you'll see "Authentication failed (Keycloak)" on first load. In the new realm (not master), go to *Realm settings → Security defenses → Headers*, clear *X-Frame-Options*, and set *Content-Security-Policy* to:
+
+```text
+frame-src 'self' <your-dashy-origin>; frame-ancestors 'self' <your-dashy-origin>; object-src 'none';
+```
+
+Click Save. Same-origin production deployments don't need this.
 
 You can now create your first user.
 
 1. In the left-hand menu, click 'Users', then 'Add User'
-2. Fill in the form, including username and hit 'Save'
+2. Fill in the form. On Keycloak 25 and newer, *First name* and *Last name* are required by the default user-profile schema. If you skip them the user can sign in but login will then fail with "Account is not fully set up"
 3. Under the 'Credentials' tab, give the new user an initial password. They will be prompted to change this after first login
 
-The last thing we need to do in the Keycloak admin console is to create a new client
+Next, create a new client for Dashy.
 
 1. Within your new realm, navigate to 'Clients' on the left-hand side, then click 'Create' in the top-right
-2. Choose a 'Client ID', set 'Client Protocol' to 'openid-connect', and for 'Valid Redirect URIs' put a URL pattern to where you're hosting Dashy (if you're just testing locally, then * is fine), and do the same for the 'Web Origins' field
-3. Make note of your client-id, and click 'Save'
+2. Choose a 'Client ID' (e.g. `dashy`), set 'Client Protocol' to 'openid-connect'
+3. Turn *Client authentication* OFF and leave *Standard flow* enabled. Dashy is a SPA, so it acts as an OAuth public client with PKCE. A confidential client requires a client_secret that a browser app can't safely hold
+4. For 'Valid Redirect URIs' put the URL where you host Dashy, with a trailing `/*` (e.g. `https://dashy.example.com/*`). When testing locally on both `localhost` and `127.0.0.1`, add both
+5. Set 'Valid post logout redirect URIs' to the same values
+6. For 'Web Origins' use the same URLs but without `/*` (Web Origins want bare origins, and adding `/*` here causes a 403 on Keycloak's session iframe)
+7. Make note of your client-id, and click 'Save'
+
+For the `adminRole` check to work, the role must appear in the id_token (Keycloak's default mapper only adds it to the access token):
+
+1. Open your `dashy` client, go to the *Client scopes* tab, click the dedicated scope row (`dashy-dedicated`)
+2. Add a new mapper of type *User Realm Role*, name it (e.g. `realm_roles`), claim name `realm_access.roles`, multivalued ON, *Add to ID token* ON, *Add to access token* ON, *Add to userinfo* ON
+3. (Optional, for `adminGroup` instead of `adminRole`) Add a second mapper of type *Group Membership*, claim name `groups`
+
+To create the admin role itself and grant it to a user:
+
+1. *Realm roles* in the left-hand menu, *Create role*, name it (e.g. `dashy-admin`)
+2. *Users* → pick your admin user → *Role mapping* → *Assign role* → select `dashy-admin`
+
+Keycloak should now be configured, and ready to go! The Keycloak UI is not super intuitive, so if you're struggling to find where to configure any of the above options, below is a full start-to-end walkthrough video:
+
+https://github.com/user-attachments/assets/12b6a596-1ec6-453a-9ff7-d4e2c3aa69f7
 
 ### 3. Enable Keycloak in Dashy Config File
 
@@ -246,16 +331,16 @@ For example:
 
 ```yaml
 appConfig:
-  ...
+  # ...
+  disableConfigurationForNonAdmin: true
   auth:
     enableKeycloak: true
     keycloak:
-      serverUrl: 'http://localhost:8081'
-      realm: 'alicia-homelab'
+      serverUrl: 'http://localhost:9100'
+      realm: 'dashy'
       clientId: 'dashy'
+      adminRole: 'dashy-admin'  # role name that grants admin privileges
 ```
-
-Note that if you are using Keycloak V 17 or older, you will also need to set `legacySupport: true` (also under `appConfig.auth.keycloak`). This is because the API endpoint was updated in later versions.
 
 If you use Keycloak with an external Identity Provier, you can set the `idpHint: 'alias-of-kc-idp'` option to allow the IdP Hint to be passed to Keycloak. This will cause Keycloak to skip its login page and redirect the user directly to the specified IdP's login page. Set to the value of the 'Alias' field of the desired IdP as defined in Keycloak under 'Identity Providers'.
 
@@ -263,7 +348,7 @@ If you use Keycloak with an external Identity Provier, you can set the `idpHint:
 
 Keycloak allows you to assign users roles and groups. You can use these values to configure who can access various sections or items in Dashy.
 Keycloak server administration and configuration is a deep topic; please refer to the [server admin guide](https://www.keycloak.org/docs/latest/server_admin/index.html#assigning-permissions-and-access-using-roles-and-groups) to see details about creating and assigning roles and groups.
-Once you have groups or roles assigned to users you can configure access under each section or item `displayData.showForKeycloakUser` and `displayData.hideForKeycloakUser`.
+Once you have groups or roles assigned to users you can configure access under each section or item `displayData.showForKeycloakUsers` and `displayData.hideForKeycloakUsers`.
 Both show and hide configurations accept a list of `groups` and `roles` that limit access. If a users data matches one or more items in these lists they will be allowed or excluded as defined.
 
 ```yaml
@@ -281,27 +366,39 @@ sections:
             groups: ['DevelopmentTeam']
 ```
 
-Depending on how you're hosting Dashy and Keycloak, you may also need to set some HTTP headers, to prevent a CORS error. This would typically be the `Access-Control-Allow-Origin [URL-of Dashy]` on your Keycloak instance. See the [Setting Headers](https://github.com/Lissy93/dashy/blob/master/docs/management.md#setting-headers) guide in the management docs for more info.
-
 Your app is now secured :) When you load Dashy, it will redirect to your Keycloak login page, and any user without valid credentials will be prevented from accessing your dashboard.
 
 From within the Keycloak console, you can then configure things like time-outs, password policies, etc. You can also backup your full Keycloak config, and it is recommended to do this, along with your Dashy config. You can spin up both Dashy and Keycloak simultaneously and restore both applications configs using a `docker-compose.yml` file, and this is recommended.
+
+### How server-side enforcement works
+
+Dashy's server reads `auth.keycloak` from `conf.yml` at boot, lazily fetches your Keycloak realm's OIDC discovery doc + JWKS, then verifies the `id_token` the SPA attaches to every API call as `Authorization: Bearer <id_token>`. Tokens that fail signature / issuer / audience / expiry verification are rejected with `401`. Write endpoints (`POST /config-manager/save`) additionally require the `adminRole` (or `adminGroup`) to be present in the token claims, and non-admins receive `403`. Unauthenticated requests for `/conf.yml` get a stripped response containing only the `auth` block plus a minimal `pageInfo`, just enough for the SPA to bootstrap the login flow. The full config is only served to authenticated users.
+
+The admin check reads the role / group claim from the id_token, so the client mapper from Step 2 above (the one with *Add to ID token* on) is what makes `adminRole` / `adminGroup` work. Without it the server gets a token with no roles claim and treats everyone as non-admin.
 
 ### Troubleshooting Keycloak
 
 If you encounter issues with your Keycloak setup, follow these steps to troubleshoot and resolve common problems.
 
-1. Client Authentication Issue
+#### 1. Client Authentication Issue
 Problem: Redirect loop, if client authentication is enabled.
-Solution: Switch off "client authentication" in "TC clients" -> "Advanced" settings.
+Solution: Switch off "Client authentication" in the dashy client's "Advanced" settings.
 
-2. Double URL
-Problem: If you get redirected to "https://dashy.my.domain/#iss=https://keycloak.my.domain/realms/my-realm"
-Solution: Make sure to turn on "Exclude Issuer From Authentication Response" in "TC clients" -> "Advanced" -> "OpenID Connect Compatibility Modes"
+#### 2. Double URL
+Problem: If you get redirected to "https://dashy.my.domain/#iss=https://keycloak.my.domain/realms/dashy"
+Solution: Turn on "Exclude Issuer From Authentication Response" in the dashy client's "Advanced" -> "OpenID Connect Compatibility Modes".
 
-3. Problems with mutiple Dashy Pages
+#### 3. Problems with multiple Dashy Pages
 Problem: Refreshing or logging out of dashy results in an "invalid_redirect_uri" error.
-Solution: In "TC clients" -> "Access settings" -> "Root URL" https://dashy.my.domain/, valid redirect URIs must be /*
+Solution: In the dashy client's "Access settings", set "Root URL" to https://dashy.my.domain/, and make sure the valid redirect URIs end in /*.
+
+#### 4. 403 on login-status-iframe.html/init
+Problem: Browser console shows a 403 from Keycloak when the SPA loads.
+Solution: Open the dashy client's "Web origins" and remove any trailing `/*`. Web Origins must be bare origins (e.g. http://localhost:4000), not http://localhost:4000/*.
+
+#### 5. CSP error for /3p-cookies/step1.html or "Authentication failed (Keycloak)"
+Problem: The hidden Keycloak iframe is blocked by frame-ancestors.
+Solution: In the dashy realm (not master), open Realm settings -> Security defenses -> Headers. Clear X-Frame-Options and set the Content-Security-Policy as described earlier in this section.
 
 ---
 
@@ -347,7 +444,7 @@ appConfig:
 
 - The `proxyWhitelist` checks `req.socket.remoteAddress`, which is the direct connection source. If your proxy connects through Docker networking, use the container's internal IP (e.g. `172.18.0.2`), not the external IP
 - Logout clears Dashy's session cookie, but the user remains authenticated at the proxy level. Revisiting the page will re-authenticate automatically
-- When header auth is enabled, server-side API endpoints are also protected by the proxy whitelist. Requests not from a whitelisted IP will be rejected. Admin enforcement applies - only users with `type: admin` can access write endpoints (config save, rebuild)
+- When header auth is enabled, server-side API endpoints are also protected by the proxy whitelist. Requests not from a whitelisted IP will be rejected. Admin enforcement applies - only users with `type: admin` can access write endpoints (config save)
 
 ---
 
@@ -357,6 +454,7 @@ Dashy also supports using a general [OIDC compatible](https://openid.net/connect
 
 ```yaml
 appConfig:
+  disableConfigurationForNonAdmin: true # Prevent authenticated non-admins using editor
   auth:
     enableOidc: true
     oidc:
@@ -368,7 +466,9 @@ appConfig:
 
 Because Dashy is a SPA, a [public client](https://datatracker.ietf.org/doc/html/rfc6749#section-2.1) registration with PKCE is needed.
 
-Note, that if your `clientId` is numeric, you must place it in quotes. Otherwise it will be interpreted as a number and truncated to 64 chars!
+If you set `adminGroup`, include `groups` in `scope` (e.g. `scope: 'openid profile email groups'`) so your IdP actually returns the claim in the id_token. Same goes for `adminRole` and a `roles` scope if your IdP needs one.
+
+Note, that if your `clientId` is numeric, you must place it in quotes. Otherwise YAML parses it as a number, and values longer than JavaScript's safe-integer range (around 15 digits) lose precision, which makes the client ID match fail.
 
 An example for Authelia is shared below, but other OIDC systems can be used:
 
@@ -395,6 +495,12 @@ identity_providers:
 ```
 
 Groups and roles will be populated and available for controlling display similar to [Keycloak](#Keycloak) above.
+
+### How server-side enforcement works
+
+Dashy's server reads `auth.oidc` from `conf.yml` at boot, lazily fetches the OIDC discovery doc + JWKS from your `endpoint`, then verifies the `id_token` the SPA attaches to every API call as `Authorization: Bearer <id_token>`. Tokens that fail signature / issuer / audience / expiry verification are rejected with `401`. Write endpoints (`POST /config-manager/save`) additionally require the `adminGroup` (or `adminRole`) to be present in the token's `groups` / `roles` claims, and non-admins receive `403`. Unauthenticated requests for `/conf.yml` get a stripped response containing only the `auth` block plus a minimal `pageInfo`, just enough for the SPA to bootstrap the login flow. The full config is only served to authenticated users.
+
+Your IdP must include `groups` / `roles` in the id_token, not only the access token, for the admin check to work (most IdPs do this when the `groups` scope is requested).
 
 ---
 
@@ -433,7 +539,7 @@ A dialog box will pop-up, select the `OAuth2/OpenID Provider`. Click `Next`.
 
 ![image](https://github.com/user-attachments/assets/ea84fe57-b813-404d-8dad-5e221b440bdb)
 
-On the next page of the wizard, set the `Name`, `Authentication flow`, and `Authorization flow`. See example below. Using the `default-provider-authorization-implicit-consent` authorization flow on internal services and `default-provider-authorization-explicit-consent` on external services is a common practice. However, it is fully up to you on how you would like to configure this option. `Implicit` will login directly without user consent, `explicit` will ask if the user approves the service being logged into with their user credentials.
+On the next page of the wizard, set the `Name`, `Authentication flow`, `Authorization flow`, and `Invalidation flow`. See example below. Using the `default-provider-authorization-implicit-consent` authorization flow on internal services and `default-provider-authorization-explicit-consent` on external services is a common practice. However, it is fully up to you on how you would like to configure this option. `Implicit` will login directly without user consent, `explicit` will ask if the user approves the service being logged into with their user credentials. For the invalidation flow (required on Authentik 2023.10 and later) the built-in `default-provider-invalidation-flow` is fine.
 
 ![image](https://github.com/user-attachments/assets/e600aeaf-08d1-49aa-b304-11e90e5c89cd)
 
@@ -448,7 +554,15 @@ Scroll down to set the `Signing Key`. It is recommended to use the built in `aut
 
 ![image](https://github.com/user-attachments/assets/386c0750-9d2b-4482-8938-8b301b489b38)
 
-Expand `Advanced protocol settings` then verify the `Scopes` are set to what is highlighted in `white` below. Set the `Subject mode` to `Based on the Users's Email`.
+If you plan to use `adminGroup` in your Dashy config, you need a `groups` scope mapping first. Authentik does not ship one by default. Open *Customisation > Property Mappings* in a new tab, click *Create > Scope Mapping*, set *Name* to `groups`, *Scope name* to `groups`, and *Expression* to:
+
+```python
+return {"groups": [g.name for g in request.user.ak_groups.all()]}
+```
+
+Save it, then come back to the provider wizard.
+
+Expand `Advanced protocol settings` then verify the `Scopes` are set to what is highlighted in `white` below (including the `groups` mapping you just created, if you want `adminGroup` to work). Set the `Subject mode` to `Based on the User's Email`.
 
 ![image](https://github.com/user-attachments/assets/ae5e87b8-1ad6-41dd-b6e1-9665623f842a)
 
@@ -507,11 +621,12 @@ Enter the `Client ID` in the `clientId` field and `OpenID Configuration Issuer` 
 
 Below is how to configure the `auth` section in the yaml syntax. Once this is enabled, when an attempt to access `Dashy` is made it will now redirect you to the `authentik` login page moving forward.
 
-```
+```yaml
 appConfig:
   theme: glass
   layout: auto
   iconSize: medium
+  disableConfigurationForNonAdmin: true # Prevent logged-in, non-admins using the view/edit config features
   auth:
     enableOidc: true
     oidc:
@@ -565,7 +680,6 @@ sections:
   - name: Authentication
     displayData:
       sortBy: default
-      rows: 2
       cols: 1
       collapsed: false
       hideForGuests: false
